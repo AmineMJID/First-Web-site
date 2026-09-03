@@ -20,6 +20,16 @@
 # production
 /build
 
+# database (local state — regenerate with `npm run seed`)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# local debug logs written by lib/auth.js
+portal_debug.log
+
 # misc
 .DS_Store
 *.pem
