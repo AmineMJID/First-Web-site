@@ -1,81 +1,60 @@
-// Auth Login API - POST /api/auth/login
-import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { comparePassword, signToken } from '@/lib/auth';
+// POST /api/auth/login
+import { getDb, ensureSeeded } from '@/lib/db';
+import { comparePassword, signToken, sessionPayload, publicUser, cookieOptions, COOKIE_NAME } from '@/lib/auth';
+import { json, error, readJson } from '@/lib/api';
+
+// Very small in-memory rate limiter (per username+ip): 10 attempts / 15 min
+const attempts = new Map();
+const WINDOW = 15 * 60 * 1000;
+const MAX = 10;
+function tooManyAttempts(key) {
+    const now = Date.now();
+    const entry = attempts.get(key) || [];
+    const recent = entry.filter((t) => now - t < WINDOW);
+    attempts.set(key, recent);
+    return recent.length >= MAX;
+}
+function recordAttempt(key) {
+    attempts.set(key, [...(attempts.get(key) || []), Date.now()]);
+}
 
 export async function POST(request) {
     try {
-        const { username, password } = await request.json();
+        await ensureSeeded();
+        const body = await readJson(request);
+        const username = String(body?.username || '').trim().toLowerCase();
+        const password = String(body?.password || '');
+        if (!username || !password) return error('Username and password required');
 
-        if (!username || !password) {
-            return NextResponse.json({ error: 'Username and password required' }, { status: 400 });
-        }
+        const ip = request.headers.get('x-forwarded-for')?.split(',')[0] || 'local';
+        const key = `${username}@${ip}`;
+        if (tooManyAttempts(key)) return error('Too many attempts. Try again later.', 429);
 
         const db = getDb();
-        const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-
+        const user = db.prepare('SELECT * FROM users WHERE lower(username) = ?').get(username);
         if (!user || !comparePassword(password, user.password)) {
-            return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+            recordAttempt(key);
+            return error('Invalid credentials', 401);
         }
+        attempts.delete(key);
 
-        // Determine if 2FA is required based on role
+        // Admins and teachers must complete 2FA before receiving a session
         if (user.role === 'admin' || user.role === 'teacher') {
-            // Generate a temporary token that expires very quickly (e.g. 10 mins) to allow them to complete 2FA
-            const tempToken = await signToken({
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                fullName: user.full_name,
-                temp: true
-            }, '24h'); // We might need to adjust auth.js signToken if we want flexible expirations, but the default is 24h which is okay for this temp token as long as it's not the final generic token. Actually, we'll just check for a 'temp' flag or rely on the frontend flow.
-
-            if (!user.two_factor_secret) {
-                return NextResponse.json({
-                    success: true,
-                    requires2FASetup: true,
-                    tempToken
-                });
-            } else {
-                return NextResponse.json({
-                    success: true,
-                    requires2FA: true,
-                    tempToken
-                });
-            }
+            const tempToken = await signToken({ ...sessionPayload(user), temp: true }, '10m');
+            return json({
+                success: true,
+                requires2FA: !!user.two_factor_secret,
+                requires2FASetup: !user.two_factor_secret,
+                tempToken,
+            });
         }
 
-        // If not admin/teacher (e.g., student), proceed as normal
-        // Create JWT token
-        const token = await signToken({
-            id: user.id,
-            username: user.username,
-            role: user.role,
-            fullName: user.full_name,
-        });
-
-        // Set httpOnly cookie
-        const response = NextResponse.json({
-            success: true,
-            user: {
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                fullName: user.full_name,
-                email: user.email,
-            },
-        });
-
-        response.cookies.set('auth-token', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            maxAge: 60 * 60 * 24, // 24 hours
-            path: '/',
-        });
-
+        const token = await signToken(sessionPayload(user));
+        const response = json({ success: true, user: publicUser(user) });
+        response.cookies.set(COOKIE_NAME, token, cookieOptions(request));
         return response;
-    } catch (error) {
-        console.error('Login error:', error);
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    } catch (e) {
+        console.error('Login error:', e);
+        return error('Internal server error', 500);
     }
 }

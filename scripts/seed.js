@@ -1,17 +1,23 @@
+// Seed the database with demo data.
+//   npm run seed            -> only seeds when the DB is empty
+//   npm run seed -- --force -> wipes and re-seeds
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getDb } from './db.js';
-import { hashPassword } from './auth.js';
+import { getDb, isDbEmpty } from '../lib/db.js';
+import { hashPassword } from '../lib/auth.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-process.chdir(path.join(__dirname, '..'));
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function seed() {
+export function seed({ force = false, log = console.log } = {}) {
     const db = getDb();
 
-    // Clear existing data
+    if (!isDbEmpty() && !force) {
+        log('Database already contains data – skipping seed (use --force to reset).');
+        return false;
+    }
+
     db.exec(`
+    DELETE FROM message_reads;
     DELETE FROM schedules;
     DELETE FROM messages;
     DELETE FROM attendance;
@@ -19,8 +25,10 @@ function seed() {
     DELETE FROM teachers;
     DELETE FROM students;
     DELETE FROM users;
+    DELETE FROM sqlite_sequence;
   `);
 
+    db.exec('BEGIN');
     // === Create Admin ===
     const adminPassword = hashPassword('admin123');
     db.prepare(`INSERT INTO users (username, password, role, full_name, email) VALUES (?, ?, ?, ?, ?)`)
@@ -185,14 +193,19 @@ function seed() {
         insertSchedule.run(s.cls, s.subj, s.tid, s.day, s.start, s.end, s.room);
     });
 
-    console.log('✅ Database seeded successfully!');
-    console.log('');
-    console.log('Demo Credentials:');
-    console.log('─────────────────────────────────');
-    console.log('Admin:   admin / admin123');
-    console.log('Teacher: teacher1 / teacher123');
-    console.log('Student: alice / student123');
-    console.log('─────────────────────────────────');
+    db.exec('COMMIT');
+    log('✅ Database seeded successfully!');
+    log('');
+    log('Demo Credentials:');
+    log('─────────────────────────────────');
+    log('Admin:   admin / admin123');
+    log('Teacher: teacher1 / teacher123');
+    log('Student: alice / student123');
+    log('─────────────────────────────────');
+    return true;
 }
 
-seed();
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+    process.chdir(path.join(__dirname, '..'));
+    seed({ force: process.argv.includes('--force') });
+}

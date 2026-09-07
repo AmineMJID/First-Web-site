@@ -4,17 +4,18 @@ import { useState, useEffect, createContext, useContext } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
     LayoutDashboard, Users, GraduationCap, BookOpen, Calendar, ClipboardCheck,
-    MessageSquare, BarChart3, Settings, LogOut, Moon, Sun, Menu, X, ChevronLeft,
-    Bell, User, Shield, Languages, ChevronRight
+    MessageSquare, BarChart3, Settings, LogOut, Moon, Sun, Menu, X,
+    Shield, Languages, KeyRound
 } from 'lucide-react';
 import { useLanguage } from '@/lib/LanguageContext';
+import { ToastProvider } from '@/components/Toast';
 
 // Theme context for dark mode
 const ThemeContext = createContext();
 export const useTheme = () => useContext(ThemeContext);
 
-// User context
-const UserContext = createContext();
+// User context – value is { user, refreshUser }
+const UserContext = createContext({ user: null, refreshUser: () => {} });
 export const useUser = () => useContext(UserContext);
 
 export default function DashboardLayout({ children }) {
@@ -35,40 +36,57 @@ export default function DashboardLayout({ children }) {
             { label: t.common.dashboard, href: '/dashboard/admin', icon: LayoutDashboard },
             { label: t.common.students, href: '/dashboard/admin/students', icon: Users },
             { label: t.common.teachers, href: '/dashboard/admin/teachers', icon: GraduationCap },
-            { label: t.common.messages, href: '/dashboard/admin/messages', icon: MessageSquare },
+            { label: t.common.schedule, href: '/dashboard/admin/schedule', icon: Calendar },
+            { label: t.common.messages, href: '/dashboard/admin/messages', icon: MessageSquare, badge: true },
             { label: t.common.reports, href: '/dashboard/admin/reports', icon: BarChart3 },
         ],
         teacher: [
             { label: t.common.dashboard, href: '/dashboard/teacher', icon: LayoutDashboard },
             { label: t.common.grades, href: '/dashboard/teacher/grades', icon: BookOpen },
             { label: t.common.attendance, href: '/dashboard/teacher/attendance', icon: ClipboardCheck },
-            { label: t.common.messages, href: '/dashboard/teacher/messages', icon: MessageSquare },
+            { label: t.common.schedule, href: '/dashboard/teacher/schedule', icon: Calendar },
+            { label: t.common.messages, href: '/dashboard/teacher/messages', icon: MessageSquare, badge: true },
         ],
         student: [
             { label: t.common.dashboard, href: '/dashboard/student', icon: LayoutDashboard },
             { label: t.common.schedule, href: '/dashboard/student/schedule', icon: Calendar },
             { label: t.common.grades, href: '/dashboard/student/grades', icon: BookOpen },
             { label: t.common.attendance, href: '/dashboard/student/attendance', icon: ClipboardCheck },
-            { label: t.common.messages, href: '/dashboard/student/messages', icon: MessageSquare },
+            { label: t.common.messages, href: '/dashboard/student/messages', icon: MessageSquare, badge: true },
         ],
     };
 
-    const role = pathname.split('/')[2] || 'admin';
-    const currentNav = navItems[role] || navItems.admin;
+    // The role comes from the authenticated user, not from the URL
+    const role = user?.role || pathname.split('/')[2] || 'admin';
+    const currentNav = [...(navItems[role] || navItems.admin), { label: t.common_extra.settings, href: '/dashboard/settings', icon: Settings }];
+
+    const refreshUser = () => fetch('/api/auth/me')
+        .then(r => { if (!r.ok) throw new Error('Unauthorized'); return r.json(); })
+        .then(data => { setUser(data); setLoading(false); })
+        .catch(() => { router.push('/login'); });
 
     useEffect(() => {
         const savedTheme = localStorage.getItem('portal-theme') || 'light';
         setTheme(savedTheme);
         document.documentElement.setAttribute('data-theme', savedTheme);
+        refreshUser();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-        fetch('/api/auth/me')
-            .then(r => {
-                if (!r.ok) throw new Error('Unauthorized');
-                return r.json();
-            })
-            .then(data => { setUser(data); setLoading(false); })
-            .catch(() => { router.push('/login'); });
-    }, [router]);
+    // Refresh unread counter when navigating + close mobile menu
+    useEffect(() => {
+        setMobileSidebar(false);
+        setShowLangMenu(false);
+        if (user) refreshUser();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pathname]);
+
+    // Close the sidebar on Escape
+    useEffect(() => {
+        const onKey = (e) => e.key === 'Escape' && setMobileSidebar(false);
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, []);
 
     const toggleTheme = () => {
         const newTheme = theme === 'light' ? 'dark' : 'light';
@@ -80,6 +98,7 @@ export default function DashboardLayout({ children }) {
     const handleLogout = async () => {
         await fetch('/api/auth/logout', { method: 'POST' });
         router.push('/login');
+        router.refresh();
     };
 
     if (loading) {
@@ -94,33 +113,35 @@ export default function DashboardLayout({ children }) {
     const roleColor = role === 'admin' ? '#ef4444' : role === 'teacher' ? '#3b82f6' : '#22c55e';
     const roleLabel = role === 'admin' ? t.common.adminPanel : role === 'teacher' ? t.common.teacherPanel : t.common.studentPanel;
 
+    const expanded = sidebarOpen || mobileSidebar;
     const sidebarStyle = {
         ...styles.sidebar,
-        width: sidebarOpen ? '260px' : '72px',
-        ...(mobileSidebar ? styles.sidebarMobile : {}),
+        width: expanded ? '260px' : '72px',
         left: dir === 'ltr' ? 0 : 'auto',
         right: dir === 'rtl' ? 0 : 'auto',
     };
 
     return (
         <ThemeContext.Provider value={{ theme, toggleTheme }}>
-            <UserContext.Provider value={user}>
+            <UserContext.Provider value={{ user, refreshUser }}>
+              <ToastProvider>
                 <div style={{ ...styles.wrapper, direction: dir }}>
                     {mobileSidebar && (
                         <div style={styles.overlay} onClick={() => setMobileSidebar(false)} />
                     )}
 
                     <aside
+                        className={`portal-sidebar ${mobileSidebar ? 'is-open' : ''}`}
                         style={sidebarStyle}
                         onMouseEnter={() => setSidebarOpen(true)}
                         onMouseLeave={() => setSidebarOpen(false)}
                     >
                         <div style={styles.sidebarHeader}>
-                            <div style={{ ...styles.sidebarLogo, justifyContent: sidebarOpen ? 'flex-start' : 'center', width: '100%' }}>
+                            <div style={{ ...styles.sidebarLogo, justifyContent: expanded ? 'flex-start' : 'center', width: '100%' }}>
                                 <div style={styles.logoMark}>
                                     <GraduationCap size={22} color="white" />
                                 </div>
-                                {sidebarOpen && (
+                                {expanded && (
                                     <div style={{ overflow: 'hidden', whiteSpace: 'nowrap' }}>
                                         <div style={styles.logoText}>Student Portal</div>
                                         <div style={styles.logoSubtext}>{t.common.academicSystem}</div>
@@ -129,7 +150,7 @@ export default function DashboardLayout({ children }) {
                             </div>
                         </div>
 
-                        {sidebarOpen && (
+                        {expanded && (
                             <div style={{ ...styles.roleBadge, background: `${roleColor}22`, borderColor: `${roleColor}44` }}>
                                 <Shield size={14} style={{ color: roleColor }} />
                                 <span style={{ color: roleColor, fontWeight: 600, fontSize: '0.75rem' }}>{roleLabel}</span>
@@ -140,20 +161,26 @@ export default function DashboardLayout({ children }) {
                             {currentNav.map(item => {
                                 const Icon = item.icon;
                                 const isActive = pathname === item.href;
+                                const count = item.badge ? (user?.unreadMessages || 0) : 0;
                                 return (
                                     <a
                                         key={item.href}
                                         href={item.href}
+                                        title={item.label}
                                         onClick={(e) => { e.preventDefault(); router.push(item.href); setMobileSidebar(false); }}
                                         style={{
                                             ...styles.navItem,
                                             ...(isActive ? styles.navItemActive : {}),
-                                            justifyContent: sidebarOpen ? 'flex-start' : 'center',
-                                            padding: sidebarOpen ? '10px 16px' : '10px',
+                                            justifyContent: expanded ? 'flex-start' : 'center',
+                                            padding: expanded ? '10px 16px' : '10px',
                                         }}
                                     >
-                                        <Icon size={20} />
-                                        {sidebarOpen && <span>{item.label}</span>}
+                                        <span style={{ position: 'relative', display: 'flex' }}>
+                                            <Icon size={20} />
+                                            {count > 0 && !expanded && <span style={styles.dot} />}
+                                        </span>
+                                        {expanded && <span style={{ flex: 1 }}>{item.label}</span>}
+                                        {expanded && count > 0 && <span style={styles.countBadge}>{count}</span>}
                                         {isActive && <div style={{ ...styles.activeIndicator, [dir === 'ltr' ? 'right' : 'left']: '-8px' }} />}
                                     </a>
                                 );
@@ -161,25 +188,29 @@ export default function DashboardLayout({ children }) {
                         </nav>
 
                         <div style={styles.sidebarFooter}>
-                            <button onClick={handleLogout} style={{
+                            <button onClick={handleLogout} title={t.common.signOut} style={{
                                 ...styles.navItem,
-                                justifyContent: sidebarOpen ? 'flex-start' : 'center',
-                                padding: sidebarOpen ? '10px 16px' : '10px',
+                                width: '100%',
+                                justifyContent: expanded ? 'flex-start' : 'center',
+                                padding: expanded ? '10px 16px' : '10px',
                                 color: 'rgba(255,255,255,0.6)',
                             }}>
                                 <LogOut size={20} />
-                                {sidebarOpen && <span>{t.common.signOut}</span>}
+                                {expanded && <span>{t.common.signOut}</span>}
                             </button>
                         </div>
                     </aside>
 
-                    <div style={{
+                    <div className="portal-main" style={{
                         ...styles.main,
                         marginLeft: dir === 'ltr' ? (sidebarOpen ? '260px' : '72px') : 0,
                         marginRight: dir === 'rtl' ? (sidebarOpen ? '260px' : '72px') : 0,
                     }}>
                         <header style={styles.header}>
                             <div style={styles.headerLeft}>
+                                <button className="show-mobile" style={styles.menuBtn} onClick={() => setMobileSidebar(v => !v)} aria-label={t.common_extra.menu}>
+                                    {mobileSidebar ? <X size={22} /> : <Menu size={22} />}
+                                </button>
                                 <div>
                                     <h2 style={styles.pageTitle}>
                                         {currentNav.find(n => n.href === pathname)?.label || t.common.dashboard}
@@ -224,14 +255,14 @@ export default function DashboardLayout({ children }) {
                                     )}
                                 </div>
 
-                                <button onClick={toggleTheme} style={styles.headerIconBtn} title={t.common.theme}>
+                                <button onClick={toggleTheme} style={styles.headerIconBtn} title={t.common.theme} aria-label={t.common.theme}>
                                     {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
                                 </button>
-                                <div style={styles.userChip}>
+                                <div style={{ ...styles.userChip, cursor: 'pointer' }} onClick={() => router.push('/dashboard/settings')} title={t.common_extra.settings}>
                                     <div style={{ ...styles.userAvatar, background: roleColor }}>
                                         {(user?.fullName || user?.full_name || 'U')[0]}
                                     </div>
-                                    <div style={styles.userInfo}>
+                                    <div style={styles.userInfo} className="hide-mobile">
                                         <span style={styles.userName}>{user?.fullName || user?.full_name}</span>
                                         <span style={styles.userRole}>{roleLabel}</span>
                                     </div>
@@ -240,19 +271,16 @@ export default function DashboardLayout({ children }) {
                         </header>
 
                         <main style={styles.content} className="animate-fade-in">
+                            {user?.mustChangePassword && pathname !== '/dashboard/settings' && (
+                                <div className="card" style={styles.warnBanner} onClick={() => router.push('/dashboard/settings')}>
+                                    <KeyRound size={18} /> <span>{t.settings_page.mustChangeBanner}</span>
+                                </div>
+                            )}
                             {children}
                         </main>
                     </div>
                 </div>
-
-                <style jsx global>{`
-                    .hide-mobile { display: flex; }
-                    .show-mobile { display: none; }
-                    @media (max-width: 768px) {
-                        .hide-mobile { display: none !important; }
-                        .show-mobile { display: flex !important; }
-                    }
-                `}</style>
+              </ToastProvider>
             </UserContext.Provider>
         </ThemeContext.Provider>
     );
@@ -281,10 +309,19 @@ const styles = {
         flexDirection: 'column',
         overflow: 'hidden',
     },
-    sidebarMobile: {
-        transform: 'translateX(0)',
-        width: '260px !important',
-        boxShadow: '4px 0 24px rgba(0,0,0,0.3)',
+    dot: {
+        position: 'absolute', top: '-2px', right: '-2px', width: '8px', height: '8px',
+        borderRadius: '50%', background: '#f87171', border: '2px solid #0f172a',
+    },
+    countBadge: {
+        minWidth: '20px', height: '20px', padding: '0 6px', borderRadius: '999px',
+        background: '#ef4444', color: 'white', fontSize: '0.7rem', fontWeight: 700,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+    },
+    warnBanner: {
+        display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', marginBottom: '20px',
+        background: 'var(--warning-50)', border: '1px solid var(--warning-400)', color: 'var(--warning-600)',
+        fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
     },
     sidebarHeader: {
         padding: '16px',

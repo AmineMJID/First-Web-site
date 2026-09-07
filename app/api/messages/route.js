@@ -1,98 +1,88 @@
-// Messages API - GET, POST
-import { NextResponse } from 'next/server';
+// Messages API – GET (inbox + sent), POST (send)
 import { getDb } from '@/lib/db';
+import { json, error, readJson, requireRole, clampStr } from '@/lib/api';
 
 export async function GET(request) {
-  const userId = request.headers.get('x-user-id');
-  const role = request.headers.get('x-user-role');
-  const db = getDb();
+    const { session, response } = requireRole(request);
+    if (response) return response;
+    const db = getDb();
+    const box = new URL(request.url).searchParams.get('box') || 'all'; // inbox | sent | all
 
-  // Get messages sent to this user directly, or sent by this user, or announcements for this role
-  const messages = db.prepare(`
-    SELECT m.*, u.full_name as sender_name, u.role as sender_role
-    FROM messages m
-    JOIN users u ON m.sender_id = u.id
-    WHERE m.recipient_id = ? 
-       OR m.sender_id = ? 
-       OR (m.is_announcement = 1 AND m.recipient_role = ?)
-    ORDER BY m.created_at DESC
-  `).all(userId, userId, role);
+    const inbox = db.prepare(`
+        SELECT m.*, u.full_name AS sender_name, u.role AS sender_role,
+               CASE WHEN m.is_announcement = 1
+                    THEN EXISTS(SELECT 1 FROM message_reads r WHERE r.message_id = m.id AND r.user_id = ?)
+                    ELSE m.is_read END AS is_read,
+               0 AS is_sent
+        FROM messages m JOIN users u ON m.sender_id = u.id
+        WHERE m.sender_id != ? AND (m.recipient_id = ? OR (m.is_announcement = 1 AND m.recipient_role = ?))
+        ORDER BY m.created_at DESC`).all(session.id, session.id, session.id, session.role);
 
-  // Filter out duplicate specific-recipient messages sent by the user so we don't flood the UI 
-  // with 30 copies of the exact same message body if they sent to 30 people individually.
-  // Instead we will group them by subject and body and created_at if sender_id == userId.
-  const uniqueMessagesMap = new Map();
-  for (const msg of messages) {
-    if (msg.sender_id == userId && msg.is_announcement === 0) {
-      // Create a unique key for grouping duplicate sent messages
-      // Slice the timestamp to group messages sent within exactly the same second/bulk job
-      const timeKey = new Date(msg.created_at).toISOString().slice(0, 19);
-      const key = `sent_${msg.subject}_${msg.body}_${timeKey}`;
-      if (!uniqueMessagesMap.has(key)) {
-        // To display it nicely in the UI, we might want to override recipient info
-        msg.is_bulk_sent = true;
-        uniqueMessagesMap.set(key, msg);
-      }
-    } else {
-      uniqueMessagesMap.set(msg.id, msg);
+    // Sent: group individual copies of the same bulk message together
+    const sentRows = db.prepare(`
+        SELECT m.*, u.full_name AS sender_name, u.role AS sender_role,
+               ru.full_name AS recipient_name, 1 AS is_sent
+        FROM messages m
+        JOIN users u ON m.sender_id = u.id
+        LEFT JOIN users ru ON m.recipient_id = ru.id
+        WHERE m.sender_id = ?
+        ORDER BY m.created_at DESC`).all(session.id);
+
+    const sentMap = new Map();
+    for (const m of sentRows) {
+        const key = m.is_announcement ? `a-${m.id}` : `${m.subject}|${m.body}|${String(m.created_at).slice(0, 19)}`;
+        if (!sentMap.has(key)) {
+            sentMap.set(key, { ...m, recipients: [], recipient_count: 0, read_count: 0 });
+        }
+        const entry = sentMap.get(key);
+        if (m.recipient_name) entry.recipients.push(m.recipient_name);
+        entry.recipient_count += m.is_announcement ? 0 : 1;
+        entry.read_count += m.is_read ? 1 : 0;
     }
-  }
+    const sent = [...sentMap.values()];
 
-  return NextResponse.json(Array.from(uniqueMessagesMap.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+    const result = box === 'inbox' ? inbox : box === 'sent' ? sent : [...inbox, ...sent];
+    result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    return json(result);
 }
 
 export async function POST(request) {
-  const userId = request.headers.get('x-user-id');
-  const role = request.headers.get('x-user-role');
+    const { session, response } = requireRole(request, 'admin', 'teacher');
+    if (response) return response;
 
-  if (role !== 'admin' && role !== 'teacher') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+    const body = await readJson(request);
+    const subject = clampStr(body?.subject, 150);
+    const messageBody = clampStr(body?.messageBody, 5000);
+    if (!subject || !messageBody) return error('Subject and body are required');
 
-  const body = await request.json();
-  const { recipientRole, recipientIds = [], recipientClasses = [], subject, messageBody, isAnnouncement } = body;
+    const { recipientRole, recipientIds = [], recipientClasses = [], isAnnouncement } = body;
+    const db = getDb();
 
-  if (!subject || !messageBody) {
-    return NextResponse.json({ error: 'Subject and body are required' }, { status: 400 });
-  }
-
-  const db = getDb();
-
-  if (isAnnouncement) {
-    // Global announcement to a role
-    db.prepare(`
-            INSERT INTO messages (sender_id, recipient_role, subject, body, is_announcement)
-            VALUES (?, ?, ?, ?, 1)
-        `).run(userId, recipientRole || null, subject, messageBody);
-  } else {
-    // Multi-select custom recipients
-    let targetUserIds = new Set(recipientIds);
-
-    if (recipientClasses.length > 0) {
-      const placeholders = recipientClasses.map(() => '?').join(',');
-      const classStudents = db.prepare(`SELECT user_id FROM students WHERE class_name IN (${placeholders})`).all(...recipientClasses);
-      classStudents.forEach(s => targetUserIds.add(s.user_id));
+    if (isAnnouncement) {
+        if (!['student', 'teacher'].includes(recipientRole)) return error('Invalid recipient role');
+        // Teachers may only broadcast to students
+        if (session.role === 'teacher' && recipientRole !== 'student') return error('Forbidden', 403);
+        db.prepare(`INSERT INTO messages (sender_id, recipient_role, subject, body, is_announcement) VALUES (?, ?, ?, ?, 1)`)
+            .run(session.id, recipientRole, subject, messageBody);
+        return json({ success: true, count: 1 }, 201);
     }
 
-    const insertStmt = db.prepare(`
-            INSERT INTO messages (sender_id, recipient_id, subject, body, is_announcement)
-            VALUES (?, ?, ?, ?, 0)
-        `);
-
-    // Use a transaction for bulk inserts
-    const insertMany = db.transaction((targets) => {
-      for (const targetId of targets) {
-        insertStmt.run(userId, targetId, subject, messageBody);
-      }
-    });
-
-    const targetArray = Array.from(targetUserIds);
-    if (targetArray.length > 0) {
-      insertMany(targetArray);
-    } else {
-      return NextResponse.json({ error: 'No recipients selected' }, { status: 400 });
+    const targets = new Set(recipientIds.map(Number).filter(Number.isInteger));
+    if (Array.isArray(recipientClasses) && recipientClasses.length > 0) {
+        const placeholders = recipientClasses.map(() => '?').join(',');
+        db.prepare(`SELECT user_id FROM students WHERE class_name IN (${placeholders})`).all(...recipientClasses)
+            .forEach((s) => targets.add(s.user_id));
     }
-  }
+    targets.delete(session.id);
+    if (targets.size === 0) return error('No recipients selected');
 
-  return NextResponse.json({ success: true }, { status: 201 });
+    // Make sure all targets exist (and teachers can only message students/admin)
+    const placeholders = [...targets].map(() => '?').join(',');
+    const users = db.prepare(`SELECT id, role FROM users WHERE id IN (${placeholders})`).all(...targets);
+    if (users.length !== targets.size) return error('Unknown recipient');
+
+    const insert = db.prepare(`INSERT INTO messages (sender_id, recipient_id, subject, body, is_announcement) VALUES (?, ?, ?, ?, 0)`);
+    const run = db.transaction((ids) => { for (const id of ids) insert.run(session.id, id, subject, messageBody); });
+    run([...targets]);
+    return json({ success: true, count: targets.size }, 201);
 }
