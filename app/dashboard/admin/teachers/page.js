@@ -26,7 +26,12 @@ export default function AdminTeachers() {
     const [confirm, setConfirm] = useState(null);
     const [copied, setCopied] = useState(false);
 
-    const fetchTeachers = useCallback(() => api('/api/teachers').then(setTeachers).catch((e) => toast.error(e.message)).finally(() => setLoading(false)), [toast]);
+    const fetchTeachers = useCallback(() => {
+        api('/api/teachers').then((res) => {
+            const data = res.data ? res.data : res;
+            setTeachers(Array.isArray(data) ? data : []);
+        }).catch((e) => toast.error(e.message)).finally(() => setLoading(false));
+    }, [toast]);
     useEffect(() => { fetchTeachers(); api('/api/classes').then((d) => setSubjects(d.subjects)).catch(() => {}); }, [fetchTeachers]);
 
     const openAdd = () => { setEditTeacher(null); setForm(EMPTY); setNewCreds(null); setShowModal(true); };

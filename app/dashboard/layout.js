@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/lib/LanguageContext';
 import { ToastProvider } from '@/components/Toast';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { SkeletonStats } from '@/components/Skeleton';
 
 // Theme context for dark mode
 const ThemeContext = createContext();
@@ -106,6 +108,9 @@ export default function DashboardLayout({ children }) {
             <div className="loading-page">
                 <div className="spinner" />
                 <p style={{ color: 'var(--text-muted)' }}>{t.common.loading}</p>
+                <div style={{ marginTop: '20px', width: '80%', maxWidth: '800px' }}>
+                    <SkeletonStats />
+                </div>
             </div>
         );
     }
@@ -276,7 +281,9 @@ export default function DashboardLayout({ children }) {
                                     <KeyRound size={18} /> <span>{t.settings_page.mustChangeBanner}</span>
                                 </div>
                             )}
-                            {children}
+                            <ErrorBoundary>
+                                {children}
+                            </ErrorBoundary>
                         </main>
                     </div>
                 </div>
