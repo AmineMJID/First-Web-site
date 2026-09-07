@@ -1,53 +1,25 @@
-// Auth Setup 2FA API - GET /api/auth/setup-2fa
-import { NextResponse } from 'next/server';
+// GET /api/auth/setup-2fa?tempToken=... – generate a fresh TOTP secret + QR code
 import { getDb } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
-import pkg from 'otplib';
-const { authenticator } = pkg;
+import { json, error } from '@/lib/api';
+import { createSecret, otpauthUri } from '@/lib/totp';
 import QRCode from 'qrcode';
 
 export async function GET(request) {
     try {
-        // Authenticate the user via the temporary token passed in query string or header
-        const { searchParams } = new URL(request.url);
-        const tempToken = searchParams.get('tempToken');
-
-        if (!tempToken) {
-            return NextResponse.json({ error: 'Temporary token required' }, { status: 401 });
-        }
-
+        const tempToken = new URL(request.url).searchParams.get('tempToken');
         const decoded = await verifyToken(tempToken);
-        console.log('Setup 2FA - TempToken Received:', tempToken?.slice(0, 10) + '...');
-        console.log('Setup 2FA - Decoded Payload:', decoded);
+        if (!decoded?.id || !decoded.temp) return error('Invalid or expired temporary token', 401);
 
-        if (!decoded || !decoded.id) {
-            return NextResponse.json({ error: 'Invalid or expired temporary token' }, { status: 401 });
-        }
+        const user = getDb().prepare('SELECT id, username, two_factor_secret FROM users WHERE id = ?').get(decoded.id);
+        if (!user) return error('User not found', 404);
+        if (user.two_factor_secret) return error('2FA is already configured', 400);
 
-        const db = getDb();
-        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.id);
-
-        if (!user) {
-            return NextResponse.json({ error: 'User not found' }, { status: 404 });
-        }
-
-        // Generate a new secret for the user (do not save to DB yet, wait for verification)
-        const secret = authenticator.generateSecret();
-
-        // Generate OTP Auth URL
-        const otpauthUrl = authenticator.keyuri(user.username, 'Student Portal', secret);
-
-        // Generate QR code
-        const qrCodeUrl = await QRCode.toDataURL(otpauthUrl);
-
-        return NextResponse.json({
-            success: true,
-            secret,
-            qrCodeUrl
-        });
-
-    } catch (error) {
-        console.error('Setup 2FA error:', error);
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        const secret = createSecret();
+        const qrCodeUrl = await QRCode.toDataURL(otpauthUri(user.username, secret));
+        return json({ success: true, secret, qrCodeUrl });
+    } catch (e) {
+        console.error('Setup 2FA error:', e);
+        return error('Internal server error', 500);
     }
 }

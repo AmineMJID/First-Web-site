@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🎓 Student Portal
 
-## Getting Started
+Portail scolaire complet (administration, enseignants, élèves) construit avec **Next.js 16**, **React 19** et **SQLite natif de Node.js** (`node:sqlite`) — aucune dépendance native à compiler.
 
-First, run the development server:
+## ✨ Fonctionnalités
+
+| Rôle | Fonctionnalités |
+|------|-----------------|
+| **Admin** | Tableau de bord & rapports (tendances de présence, répartition des notes, top / élèves à risque), gestion des élèves & enseignants (création avec identifiants auto-générés, réinitialisation mot de passe / 2FA, export CSV), **gestion des emplois du temps** (détection de conflits), messagerie (annonces, envoi par classe / destinataires multiples, accusés de lecture) |
+| **Enseignant** | Carnet de notes par matière / trimestre / classe avec remarques, saisie de présence par jour avec historique, emploi du temps personnel, messagerie vers élèves |
+| **Élève** | Notes par trimestre avec évolution, calendrier de présence, emploi du temps, messagerie |
+| **Tous** | 3 langues (FR / EN / AR avec RTL), thème sombre, page Paramètres (changement de mot de passe), responsive mobile |
+
+### Sécurité
+- Sessions JWT en cookie `httpOnly`, secret configurable (`JWT_SECRET`)
+- **2FA TOTP obligatoire** pour admins & enseignants (Google Authenticator, Authy…)
+- Tokens temporaires 2FA (10 min) ne pouvant pas ouvrir de session
+- Limitation des tentatives de connexion (10 / 15 min)
+- Mot de passe temporaire à changer à la première connexion
+- Validation serveur de toutes les entrées, contrôle d'accès par rôle sur chaque route
+
+## 🚀 Démarrage
+
+Prérequis : **Node.js ≥ 22.5** (pour `node:sqlite`).
 
 ```bash
+npm install
+cp .env.example .env.local   # puis définir JWT_SECRET
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Ouvrir http://localhost:3000. La base `data/portal.db` est créée et **remplie automatiquement avec des données de démo** au premier lancement.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+### Comptes de démonstration
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Rôle | Identifiant | Mot de passe |
+|------|-------------|--------------|
+| Admin | `admin` | `admin123` |
+| Enseignant | `teacher1` / `teacher2` / `teacher3` | `teacher123` |
+| Élève | `alice`, `bob`, `carol`, … | `student123` |
 
-## Learn More
+> Au premier login admin / enseignant, un QR code 2FA s'affiche : scannez-le avec une application d'authentification.
 
-To learn more about Next.js, take a look at the following resources:
+## 🧰 Scripts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Commande | Description |
+|----------|-------------|
+| `npm run dev` | Serveur de développement |
+| `npm run build` / `npm start` | Build et serveur de production |
+| `npm run seed` | Remplit la base si elle est vide (`-- --force` pour réinitialiser) |
+| `npm test` | Tests API end-to-end (nécessite un serveur lancé, `BASE_URL` optionnel) |
+| `npm run lint` | ESLint |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## ⚙️ Variables d'environnement
 
-## Deploy on Vercel
+Voir [`.env.example`](.env.example) : `JWT_SECRET`, `DATABASE_PATH`, `AUTO_SEED`, `COOKIE_SECURE`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🗂️ Structure
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+app/
+  api/            Routes API (auth, students, teachers, grades, attendance, messages, schedule, reports, classes)
+  dashboard/      Pages par rôle (admin / teacher / student) + settings partagé
+  login/          Connexion + 2FA
+components/       Toast, Modal, ConfirmDialog, Timetable, Messaging
+lib/
+  db.js           Couche SQLite (node:sqlite) + schéma + migrations
+  auth.js         JWT, hachage, helpers de session
+  api.js          Helpers pour les routes (requireRole, validation…)
+  i18n/           Traductions fr / en / ar
+proxy.js          Protection des routes & contrôle d'accès (ex-middleware)
+scripts/seed.js   Données de démonstration
+tests/            Tests API (node:test)
+```

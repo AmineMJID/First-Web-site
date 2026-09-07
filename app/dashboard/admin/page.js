@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Users, GraduationCap, ClipboardCheck, TrendingUp, BookOpen, Calendar, UserPlus, BarChart3 } from 'lucide-react';
+import Link from 'next/link';
+import { Users, GraduationCap, ClipboardCheck, TrendingUp, BookOpen, Calendar, UserPlus, BarChart3, AlertTriangle, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/lib/LanguageContext';
+import { api, gradeColor, subjectColor } from '@/lib/client';
 
 export default function AdminDashboard() {
     const { t } = useLanguage();
@@ -10,19 +12,16 @@ export default function AdminDashboard() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch('/api/reports')
-            .then(r => r.json())
-            .then(data => { setStats(data); setLoading(false); })
-            .catch(() => setLoading(false));
+        api('/api/reports').then(setStats).catch(() => {}).finally(() => setLoading(false));
     }, []);
 
     if (loading) return <div className="loading-page"><div className="spinner" /></div>;
 
     const cards = [
-        { label: t.dashboard.totalStudents, value: stats?.totalStudents || 0, icon: Users, color: '#3b82f6', bg: 'linear-gradient(135deg, #dbeafe, #eff6ff)' },
-        { label: t.dashboard.totalTeachers, value: stats?.totalTeachers || 0, icon: GraduationCap, color: '#8b5cf6', bg: 'linear-gradient(135deg, #ede9fe, #f5f3ff)' },
-        { label: t.dashboard.attendanceRate, value: `${stats?.attendanceRate || 0}%`, icon: ClipboardCheck, color: '#22c55e', bg: 'linear-gradient(135deg, #dcfce7, #f0fdf4)' },
-        { label: t.dashboard.averageGrade, value: stats?.avgGrade || 0, icon: TrendingUp, color: '#f59e0b', bg: 'linear-gradient(135deg, #fef3c7, #fffbeb)' },
+        { label: t.dashboard.totalStudents, value: stats?.totalStudents || 0, pct: Math.min(100, (stats?.totalStudents || 0) * 2), icon: Users, color: '#3b82f6', bg: 'linear-gradient(135deg, #dbeafe, #eff6ff)', href: '/dashboard/admin/students' },
+        { label: t.dashboard.totalTeachers, value: stats?.totalTeachers || 0, pct: Math.min(100, (stats?.totalTeachers || 0) * 10), icon: GraduationCap, color: '#8b5cf6', bg: 'linear-gradient(135deg, #ede9fe, #f5f3ff)', href: '/dashboard/admin/teachers' },
+        { label: t.dashboard.attendanceRate, value: `${stats?.attendanceRate || 0}%`, pct: stats?.attendanceRate || 0, icon: ClipboardCheck, color: '#22c55e', bg: 'linear-gradient(135deg, #dcfce7, #f0fdf4)', href: '/dashboard/admin/reports' },
+        { label: t.dashboard.averageGrade, value: stats?.avgGrade || 0, pct: stats?.avgGrade || 0, icon: TrendingUp, color: '#f59e0b', bg: 'linear-gradient(135deg, #fef3c7, #fffbeb)', href: '/dashboard/admin/reports' },
     ];
 
     return (
@@ -32,7 +31,7 @@ export default function AdminDashboard() {
                 {cards.map((card, i) => {
                     const Icon = card.icon;
                     return (
-                        <div key={i} className="card animate-fade-in" style={styles.statCard}>
+                        <Link key={i} href={card.href} className="card animate-fade-in" style={{ ...styles.statCard, textDecoration: 'none', display: 'block' }}>
                             <div style={styles.statTop}>
                                 <div>
                                     <p style={styles.statLabel}>{card.label}</p>
@@ -43,9 +42,9 @@ export default function AdminDashboard() {
                                 </div>
                             </div>
                             <div style={styles.statBar}>
-                                <div style={{ ...styles.statBarFill, width: `${Math.min(100, typeof card.value === 'string' ? parseInt(card.value) : (card.value / 20) * 100)}%`, background: card.color }} />
+                                <div style={{ ...styles.statBarFill, width: `${card.pct}%`, background: card.color }} />
                             </div>
-                        </div>
+                        </Link>
                     );
                 })}
             </div>
@@ -90,8 +89,7 @@ export default function AdminDashboard() {
                     </div>
                     <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {(stats?.gradesBySubject || []).map((g, i) => {
-                            const colors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
-                            const color = colors[i % colors.length];
+                            const color = subjectColor(g.subject);
                             return (
                                 <div key={i}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
@@ -108,21 +106,31 @@ export default function AdminDashboard() {
                 </div>
             </div>
 
-            {/* Quick Actions */}
-            <div className="card" style={{ padding: '24px', marginTop: '24px' }}>
-                <h3 style={styles.sectionTitle}>
-                    <Calendar size={20} color="#22c55e" /> {t.dashboard.quickActions}
-                </h3>
-                <div style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
-                    <a href="/dashboard/admin/students" className="btn btn-primary">
-                        <UserPlus size={18} /> {t.dashboard.addStudent}
-                    </a>
-                    <a href="/dashboard/admin/teachers" className="btn btn-outline" style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}>
-                        <GraduationCap size={18} /> {t.dashboard.manageTeachers}
-                    </a>
-                    <a href="/dashboard/admin/messages" className="btn btn-outline" style={{ color: '#3b82f6', borderColor: '#3b82f6' }}>
-                        <BookOpen size={18} /> {t.dashboard.sendAnnouncement}
-                    </a>
+            <div style={{ ...styles.contentGrid, marginTop: '24px' }}>
+                {/* At-risk students */}
+                <div className="card" style={{ padding: '24px' }}>
+                    <h3 style={styles.sectionTitle}><AlertTriangle size={20} color="#ef4444" /> {t.reports_extra.atRisk}</h3>
+                    <div style={{ marginTop: '12px' }}>
+                        {!stats?.atRiskStudents?.length && <p style={{ color: 'var(--text-muted)' }}>{t.reports_extra.noRisk}</p>}
+                        {(stats?.atRiskStudents || []).map((x) => (
+                            <div key={x.student_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}>
+                                <div style={{ flex: 1 }}><div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{x.full_name}</div><div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{x.student_id} · {x.class_name}</div></div>
+                                <span className="badge" style={{ background: `${gradeColor(x.avg)}20`, color: gradeColor(x.avg) }}>{x.avg}</span>
+                                {x.attendance_rate != null && <span className="badge" style={{ background: `${gradeColor(x.attendance_rate)}20`, color: gradeColor(x.attendance_rate) }}>{x.attendance_rate}%</span>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="card" style={{ padding: '24px' }}>
+                    <h3 style={styles.sectionTitle}><Calendar size={20} color="#22c55e" /> {t.dashboard.quickActions}</h3>
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap' }}>
+                        <Link href="/dashboard/admin/students" className="btn btn-primary"><UserPlus size={18} /> {t.dashboard.addStudent}</Link>
+                        <Link href="/dashboard/admin/teachers" className="btn btn-outline" style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}><GraduationCap size={18} /> {t.dashboard.manageTeachers}</Link>
+                        <Link href="/dashboard/admin/schedule" className="btn btn-outline" style={{ color: '#22c55e', borderColor: '#22c55e' }}><Calendar size={18} /> {t.common.schedule}</Link>
+                        <Link href="/dashboard/admin/messages" className="btn btn-outline" style={{ color: '#3b82f6', borderColor: '#3b82f6' }}><MessageSquare size={18} /> {t.dashboard.sendAnnouncement}</Link>
+                    </div>
                 </div>
             </div>
         </div>
@@ -177,7 +185,7 @@ const styles = {
     },
     contentGrid: {
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))',
         gap: '24px',
     },
     sectionHeader: {

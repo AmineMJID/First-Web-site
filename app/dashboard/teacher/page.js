@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { Users, BookOpen, ClipboardCheck, Calendar } from 'lucide-react';
+import Link from 'next/link';
 import { useLanguage } from '@/lib/LanguageContext';
+import { api } from '@/lib/client';
 
 export default function TeacherDashboard() {
     const { t } = useLanguage();
@@ -11,14 +13,10 @@ export default function TeacherDashboard() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        Promise.all([
-            fetch('/api/students').then(r => r.json()),
-            fetch('/api/schedule').then(r => r.json()),
-        ]).then(([s, sc]) => {
-            setStudents(s);
-            setSchedule(sc);
-            setLoading(false);
-        });
+        Promise.all([api('/api/students'), api('/api/schedule')])
+            .then(([s, sc]) => { setStudents(s); setSchedule(sc); })
+            .catch(() => {})
+            .finally(() => setLoading(false));
     }, []);
 
     if (loading) return <div className="loading-page"><div className="spinner" /></div>;
@@ -30,9 +28,10 @@ export default function TeacherDashboard() {
 
     // Dynamic cards
     const cards = [
-        { label: t.teacher_dashboard.myStudents, value: students.length, icon: Users, color: '#3b82f6' },
-        { label: t.teacher_dashboard.todaysClasses, value: todaySchedule.length, icon: Calendar, color: '#22c55e' },
-        { label: t.teacher_dashboard.totalSubjects, value: [...new Set(schedule.map(s => s.subject))].length, icon: BookOpen, color: '#8b5cf6' },
+        { label: t.teacher_dashboard.myStudents, value: students.length, icon: Users, color: '#3b82f6', href: '/dashboard/teacher/grades' },
+        { label: t.teacher_dashboard.todaysClasses, value: todaySchedule.length, icon: Calendar, color: '#22c55e', href: '/dashboard/teacher/schedule' },
+        { label: t.teacher_dashboard.totalSubjects, value: [...new Set(schedule.map(s => s.subject))].length, icon: BookOpen, color: '#8b5cf6', href: '/dashboard/teacher/grades' },
+        { label: t.common.attendance, value: new Date().toLocaleDateString(undefined, { day: '2-digit', month: 'short' }), icon: ClipboardCheck, color: '#f59e0b', href: '/dashboard/teacher/attendance' },
     ];
 
     return (
@@ -41,7 +40,7 @@ export default function TeacherDashboard() {
                 {cards.map((card, i) => {
                     const Icon = card.icon;
                     return (
-                        <div key={i} className="card animate-fade-in" style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <Link key={i} href={card.href} className="card animate-fade-in" style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '16px', textDecoration: 'none' }}>
                             <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <Icon size={24} color={card.color} />
                             </div>
@@ -49,12 +48,12 @@ export default function TeacherDashboard() {
                                 <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>{card.label}</p>
                                 <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: card.color }}>{card.value}</h2>
                             </div>
-                        </div>
+                        </Link>
                     );
                 })}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '24px' }}>
                 {/* Today's Schedule */}
                 <div className="card" style={{ padding: '24px' }}>
                     <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1rem', fontWeight: 700, marginBottom: '16px' }}>

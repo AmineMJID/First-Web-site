@@ -1,17 +1,29 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { GraduationCap, User, BookOpen, Shield, Eye, EyeOff, LogIn, Loader2 } from 'lucide-react';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { GraduationCap, User, BookOpen, Shield, Eye, EyeOff, LogIn, Loader2, ArrowLeft, Languages, Copy, Check } from 'lucide-react';
+import { useLanguage } from '@/lib/LanguageContext';
 
 export default function LoginPage() {
+    return (
+        <Suspense fallback={<div className="loading-page"><div className="spinner" /></div>}>
+            <LoginForm />
+        </Suspense>
+    );
+}
+
+function LoginForm() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const { t, language, changeLanguage, dir } = useLanguage();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [selectedRole, setSelectedRole] = useState('admin');
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [copied, setCopied] = useState(false);
 
     // 2FA States
     const [step, setStep] = useState('login'); // 'login', '2fa-setup', '2fa-verify'
@@ -22,9 +34,13 @@ export default function LoginPage() {
 
     const roles = [
         { key: 'admin', label: 'Admin', icon: Shield, color: '#ef4444', demo: { user: 'admin', pass: 'admin123' } },
-        { key: 'teacher', label: 'Teacher', icon: BookOpen, color: '#3b82f6', demo: { user: 'teacher1', pass: 'teacher123' } },
-        { key: 'student', label: 'Student', icon: User, color: '#22c55e', demo: { user: 'alice', pass: 'student123' } },
+        { key: 'teacher', label: t.common.teachers, icon: BookOpen, color: '#3b82f6', demo: { user: 'teacher1', pass: 'teacher123' } },
+        { key: 'student', label: t.common.students, icon: User, color: '#22c55e', demo: { user: 'alice', pass: 'student123' } },
     ];
+
+    useEffect(() => {
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('portal-theme') || 'light');
+    }, []);
 
     const fillDemo = (role) => {
         const r = roles.find(r => r.key === role);
@@ -32,39 +48,43 @@ export default function LoginPage() {
             setUsername(r.demo.user);
             setPassword(r.demo.pass);
             setSelectedRole(role);
+            setError('');
         }
+    };
+
+    const goToDashboard = (role) => {
+        const next = searchParams.get('next');
+        const safeNext = next && next.startsWith('/dashboard') ? next : `/dashboard/${role}`;
+        router.push(safeNext);
+        router.refresh();
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setError('');
-
         try {
             const res = await fetch('/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password }),
             });
-
             const data = await res.json();
             if (!res.ok) {
-                setError(data.error || 'Login failed');
+                setError(res.status === 429 ? t.login_extra.tooMany : res.status === 401 ? t.login.error : (data.error || t.login.error));
                 setLoading(false);
                 return;
             }
-
             if (data.requires2FASetup) {
                 setTempToken(data.tempToken);
-                // Fetch QR code
-                const qrRes = await fetch(`/api/auth/setup-2fa?tempToken=${data.tempToken}`);
+                const qrRes = await fetch(`/api/auth/setup-2fa?tempToken=${encodeURIComponent(data.tempToken)}`);
                 const qrData = await qrRes.json();
                 if (qrData.success) {
                     setQrCode(qrData.qrCodeUrl);
                     setSetupSecret(qrData.secret);
                     setStep('2fa-setup');
                 } else {
-                    setError('Failed to load 2FA setup');
+                    setError(qrData.error || t.common_extra.errorGeneric);
                 }
                 setLoading(false);
             } else if (data.requires2FA) {
@@ -72,10 +92,10 @@ export default function LoginPage() {
                 setStep('2fa-verify');
                 setLoading(false);
             } else {
-                router.push(`/dashboard/${data.user.role}`);
+                goToDashboard(data.user.role);
             }
-        } catch (err) {
-            setError('Network error. Please try again.');
+        } catch {
+            setError(t.login_extra.networkError);
             setLoading(false);
         }
     };
@@ -84,7 +104,6 @@ export default function LoginPage() {
         e.preventDefault();
         setLoading(true);
         setError('');
-
         try {
             const res = await fetch('/api/auth/verify-2fa', {
                 method: 'POST',
@@ -92,27 +111,69 @@ export default function LoginPage() {
                 body: JSON.stringify({
                     tempToken,
                     code: twoFactorCode,
-                    setupSecret: step === '2fa-setup' ? setupSecret : undefined
+                    setupSecret: step === '2fa-setup' ? setupSecret : undefined,
                 }),
             });
-
             const data = await res.json();
             if (!res.ok) {
-                setError(data.error || 'Verification failed');
+                setError(data.error || t.common_extra.errorGeneric);
                 setLoading(false);
+                if (res.status === 401 && /temporary/i.test(data.error || '')) backToLogin();
                 return;
             }
-
-            router.push(`/dashboard/${data.user.role}`);
+            goToDashboard(data.user.role);
         } catch {
-            setError('Network error. Please try again.');
+            setError(t.login_extra.networkError);
             setLoading(false);
         }
     };
 
+    const backToLogin = () => {
+        setStep('login');
+        setTwoFactorCode('');
+        setTempToken('');
+        setQrCode('');
+        setSetupSecret('');
+        setError('');
+        setLoading(false);
+    };
+
+    const copySecret = async () => {
+        try {
+            await navigator.clipboard.writeText(setupSecret);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch { /* ignore */ }
+    };
+
+    const codeInput = (
+        <div className="form-group">
+            <label htmlFor="code">{t.login_extra.code}</label>
+            <input
+                id="code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="000000"
+                value={twoFactorCode}
+                onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                maxLength={6}
+                autoFocus
+                style={{ textAlign: 'center', letterSpacing: '8px', fontSize: '1.5rem', fontWeight: 'bold', direction: 'ltr' }}
+                required
+            />
+        </div>
+    );
+
+    const submitBtn = (label, loadingLabel, Icon) => (
+        <button type="submit" disabled={loading} style={{ ...styles.submitBtn, opacity: loading ? 0.7 : 1, marginTop: '20px' }}>
+            {loading ? <Loader2 size={20} style={{ animation: 'spin 0.6s linear infinite' }} /> : <Icon size={20} />}
+            {loading ? loadingLabel : label}
+        </button>
+    );
+
     return (
-        <div style={styles.container}>
-            {/* Animated background shapes */}
+        <div style={{ ...styles.container, direction: dir }}>
             <div style={styles.bgShapes}>
                 <div style={{ ...styles.shape, ...styles.shape1 }} />
                 <div style={{ ...styles.shape, ...styles.shape2 }} />
@@ -122,8 +183,7 @@ export default function LoginPage() {
                 <div style={{ ...styles.shape, ...styles.shape6 }} />
             </div>
 
-            {/* Floating education icons */}
-            <div style={styles.floatingIcons}>
+            <div style={styles.floatingIcons} aria-hidden="true">
                 <span style={{ ...styles.floatIcon, top: '10%', left: '5%', animationDelay: '0s' }}>📚</span>
                 <span style={{ ...styles.floatIcon, top: '20%', right: '8%', animationDelay: '1s' }}>🎓</span>
                 <span style={{ ...styles.floatIcon, bottom: '15%', left: '10%', animationDelay: '2s' }}>✏️</span>
@@ -132,25 +192,33 @@ export default function LoginPage() {
                 <span style={{ ...styles.floatIcon, bottom: '30%', right: '12%', animationDelay: '2.5s' }}>🌍</span>
             </div>
 
+            {/* Language switch */}
+            <div style={styles.langBar}>
+                <Languages size={16} color="#64748b" />
+                {['fr', 'en', 'ar'].map(code => (
+                    <button key={code} onClick={() => changeLanguage(code)} style={{ ...styles.langBtn, ...(language === code ? styles.langBtnActive : {}) }}>
+                        {code.toUpperCase()}
+                    </button>
+                ))}
+            </div>
+
             <div style={styles.loginCard}>
-                {/* Header */}
                 <div style={styles.cardHeader}>
                     <div style={styles.logoContainer}>
                         <div style={styles.logoCircle}>
                             <GraduationCap size={32} color="white" />
                         </div>
                     </div>
-                    <h1 style={styles.title}>Student Portal</h1>
+                    <h1 style={styles.title}>{t.login.title}</h1>
                     <p style={styles.subtitle}>
-                        {step === '2fa-setup' ? 'Set up Two-Factor Authentication' :
-                            step === '2fa-verify' ? 'Two-Factor Authentication' :
-                                'Welcome back! Please sign in to continue.'}
+                        {step === '2fa-setup' ? t.login_extra.setup2faTitle :
+                            step === '2fa-verify' ? t.login_extra.verify2faTitle :
+                                t.login.subtitle}
                     </p>
                 </div>
 
                 {step === 'login' && (
                     <>
-                        {/* Role Tabs */}
                         <div style={styles.roleTabs}>
                             {roles.map(role => {
                                 const Icon = role.icon;
@@ -158,6 +226,7 @@ export default function LoginPage() {
                                 return (
                                     <button
                                         key={role.key}
+                                        type="button"
                                         onClick={() => fillDemo(role.key)}
                                         style={{
                                             ...styles.roleTab,
@@ -174,23 +243,20 @@ export default function LoginPage() {
                                 );
                             })}
                         </div>
+                        <p style={styles.demoHint}>{t.login_extra.demoHint}</p>
 
-                        {/* Login Form */}
                         <form onSubmit={handleSubmit} style={styles.form}>
-                            {error && (
-                                <div style={styles.errorBox}>
-                                    <span>⚠️</span> {error}
-                                </div>
-                            )}
+                            {error && <div style={styles.errorBox} role="alert"><span>⚠️</span> {error}</div>}
 
                             <div className="form-group">
-                                <label htmlFor="username">Username</label>
+                                <label htmlFor="username">{t.login.username}</label>
                                 <div style={styles.inputWrapper}>
                                     <User size={18} style={styles.inputIcon} />
                                     <input
                                         id="username"
                                         type="text"
-                                        placeholder="Enter your username"
+                                        autoComplete="username"
+                                        placeholder={t.login.username}
                                         value={username}
                                         onChange={(e) => setUsername(e.target.value)}
                                         style={styles.inputWithIcon}
@@ -200,127 +266,62 @@ export default function LoginPage() {
                             </div>
 
                             <div className="form-group">
-                                <label htmlFor="password">Password</label>
+                                <label htmlFor="password">{t.login.password}</label>
                                 <div style={styles.inputWrapper}>
                                     <Shield size={18} style={styles.inputIcon} />
                                     <input
                                         id="password"
                                         type={showPassword ? 'text' : 'password'}
-                                        placeholder="Enter your password"
+                                        autoComplete="current-password"
+                                        placeholder={t.login.password}
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
                                         style={styles.inputWithIcon}
                                         required
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowPassword(!showPassword)}
-                                        style={styles.eyeBtn}
-                                    >
+                                    <button type="button" onClick={() => setShowPassword(!showPassword)} style={styles.eyeBtn} aria-label="Toggle password">
                                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                     </button>
                                 </div>
                             </div>
 
-                            <button
-                                type="submit"
-                                disabled={loading}
-                                style={{
-                                    ...styles.submitBtn,
-                                    opacity: loading ? 0.7 : 1,
-                                }}
-                            >
-                                {loading ? <Loader2 size={20} className="spin" style={{ animation: 'spin 0.6s linear infinite' }} /> : <LogIn size={20} />}
-                                {loading ? 'Signing in...' : 'Sign In'}
-                            </button>
+                            {submitBtn(t.login.signIn, t.login.signingIn, LogIn)}
                         </form>
                     </>
                 )}
 
                 {step === '2fa-setup' && (
-                    <div style={styles.form}>
-                        <p style={{ textAlign: 'center', fontSize: '0.85rem', color: '#64748b', marginBottom: '16px' }}>
-                            Scan this QR code with Google Authenticator or a similar app.
-                        </p>
-                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px', background: 'white', padding: '10px', borderRadius: '12px' }}>
-                            {qrCode ? <img src={qrCode} alt="2FA QR Code" style={{ width: '180px', height: '180px' }} /> : <div style={{ width: '180px', height: '180px', background: '#f1f5f9' }} />}
-                        </div>
-                        <form onSubmit={handleVerify2FA}>
-                            {error && (
-                                <div style={styles.errorBox}>
-                                    <span>⚠️</span> {error}
-                                </div>
-                            )}
-                            <div className="form-group">
-                                <label htmlFor="code">Verification Code</label>
-                                <input
-                                    id="code"
-                                    type="text"
-                                    placeholder="Enter 6-digit code"
-                                    value={twoFactorCode}
-                                    onChange={(e) => setTwoFactorCode(e.target.value)}
-                                    maxLength={6}
-                                    style={{ textAlign: 'center', letterSpacing: '4px', fontSize: '1.2rem', fontWeight: 'bold' }}
-                                    required
-                                />
+                    <form onSubmit={handleVerify2FA} style={styles.form}>
+                        <p style={styles.hint}>{t.login_extra.setup2faHint}</p>
+                        {qrCode && (
+                            <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+                                {/* eslint-disable-next-line @next/next/no-img-element -- data URL */}
+                                <img src={qrCode} alt="QR Code" style={{ width: '180px', height: '180px', borderRadius: '12px', border: '1px solid #e2e8f0', background: 'white', padding: '6px' }} />
                             </div>
-                            <button
-                                type="submit"
-                                disabled={loading}
-                                style={{
-                                    ...styles.submitBtn,
-                                    opacity: loading ? 0.7 : 1,
-                                    marginTop: '16px'
-                                }}
-                            >
-                                {loading ? <Loader2 size={20} className="spin" style={{ animation: 'spin 0.6s linear infinite' }} /> : <Shield size={20} />}
-                                {loading ? 'Verifying...' : 'Verify & Complete Setup'}
+                        )}
+                        <p style={{ ...styles.hint, marginBottom: '6px' }}>{t.login_extra.manualKey}</p>
+                        <div style={styles.secretBox}>
+                            <code style={{ flex: 1, wordBreak: 'break-all', fontSize: '0.8rem', direction: 'ltr' }}>{setupSecret}</code>
+                            <button type="button" onClick={copySecret} style={styles.copyBtn} aria-label={t.common_extra.copy}>
+                                {copied ? <Check size={16} color="#22c55e" /> : <Copy size={16} />}
                             </button>
-                        </form>
-                    </div>
+                        </div>
+                        {error && <div style={styles.errorBox} role="alert"><span>⚠️</span> {error}</div>}
+                        {codeInput}
+                        {submitBtn(t.login_extra.verify, t.login_extra.verifying, Shield)}
+                        <button type="button" onClick={backToLogin} style={styles.backBtn}><ArrowLeft size={16} /> {t.login_extra.back}</button>
+                    </form>
                 )}
 
                 {step === '2fa-verify' && (
-                    <div style={styles.form}>
-                        <p style={{ textAlign: 'center', fontSize: '0.85rem', color: '#64748b', marginBottom: '20px' }}>
-                            Enter the 6-digit code from your authenticator app.
-                        </p>
-                        <form onSubmit={handleVerify2FA}>
-                            {error && (
-                                <div style={styles.errorBox}>
-                                    <span>⚠️</span> {error}
-                                </div>
-                            )}
-                            <div className="form-group">
-                                <label htmlFor="code">Authentication Code</label>
-                                <input
-                                    id="code"
-                                    type="text"
-                                    placeholder="000000"
-                                    value={twoFactorCode}
-                                    onChange={(e) => setTwoFactorCode(e.target.value)}
-                                    maxLength={6}
-                                    style={{ textAlign: 'center', letterSpacing: '8px', fontSize: '1.5rem', fontWeight: 'bold' }}
-                                    required
-                                />
-                            </div>
-                            <button
-                                type="submit"
-                                disabled={loading}
-                                style={{
-                                    ...styles.submitBtn,
-                                    opacity: loading ? 0.7 : 1,
-                                    marginTop: '24px'
-                                }}
-                            >
-                                {loading ? <Loader2 size={20} className="spin" style={{ animation: 'spin 0.6s linear infinite' }} /> : <Shield size={20} />}
-                                {loading ? 'Verifying...' : 'Authenticate'}
-                            </button>
-                        </form>
-                    </div>
+                    <form onSubmit={handleVerify2FA} style={styles.form}>
+                        <p style={styles.hint}>{t.login_extra.verify2faHint}</p>
+                        {error && <div style={styles.errorBox} role="alert"><span>⚠️</span> {error}</div>}
+                        {codeInput}
+                        {submitBtn(t.login_extra.verify, t.login_extra.verifying, Shield)}
+                        <button type="button" onClick={backToLogin} style={styles.backBtn}><ArrowLeft size={16} /> {t.login_extra.back}</button>
+                    </form>
                 )}
-
-
             </div>
 
             <style jsx global>{`
@@ -334,12 +335,34 @@ export default function LoginPage() {
           50% { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; }
           75% { border-radius: 60% 40% 50% 50% / 40% 50% 60% 50%; }
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
         </div>
     );
 }
 
 const styles = {
+    langBar: {
+        position: 'absolute', top: '16px', right: '16px', display: 'flex', alignItems: 'center', gap: '4px',
+        background: 'rgba(255,255,255,0.85)', padding: '6px 10px', borderRadius: '999px', zIndex: 2,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+    },
+    langBtn: {
+        border: 'none', background: 'transparent', padding: '4px 8px', borderRadius: '999px',
+        fontSize: '0.75rem', fontWeight: 700, color: '#64748b', cursor: 'pointer',
+    },
+    langBtnActive: { background: '#1e40af', color: 'white' },
+    demoHint: { textAlign: 'center', fontSize: '0.75rem', color: '#94a3b8', marginTop: '-8px', marginBottom: '12px' },
+    hint: { textAlign: 'center', fontSize: '0.85rem', color: '#64748b', marginBottom: '16px', lineHeight: 1.5 },
+    secretBox: {
+        display: 'flex', alignItems: 'center', gap: '8px', background: '#f1f5f9', borderRadius: '10px',
+        padding: '10px 12px', marginBottom: '16px', border: '1px solid #e2e8f0',
+    },
+    copyBtn: { border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748b', display: 'flex', padding: '4px' },
+    backBtn: {
+        width: '100%', marginTop: '10px', border: 'none', background: 'transparent', color: '#64748b',
+        fontSize: '0.85rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px',
+    },
     container: {
         minHeight: '100vh',
         display: 'flex',
